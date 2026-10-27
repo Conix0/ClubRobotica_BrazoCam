@@ -1,0 +1,197 @@
+#include <Arduino.h>
+#include <Servo.h>
+
+
+// ====== Inversión ======
+const bool invertBase     = true;
+const bool invertShoulder = false;
+const bool invertElbow    = true;
+const bool invertGripper  = false;
+
+// ====== Servos ======
+Servo servoBase;
+Servo servoShoulder;
+Servo servoElbow;
+Servo servoGripper;
+
+// ====== Pines ======
+const int PinTestigo  = 3;
+const int basePin     = 11;
+const int shoulderPin = 9;
+const int elbowPin    = 10;
+const int gripperPin  = 6;
+
+// Joysticks
+const int xdirPin = 14;
+const int ydirPin = 15;
+const int zdirPin = 16;
+const int gdirPin = 17;
+
+// ====== Control ======
+const int movementDelay = 10;
+const int stepPerTick   = 1;
+const int deadzone      = 80;
+
+// Tiempo sin movimiento antes de DETACH (1.5 segundos)
+const unsigned long detachDelay = 1500;
+
+// ====== Límites ======
+const int minBaseAngle     = 0;
+const int maxBaseAngle     = 170;
+
+const int minShoulderAngle = 115;
+const int maxShoulderAngle = 180;
+
+const int minElbowAngle    = 0;
+const int maxElbowAngle    = 130;
+
+// Ajusta según cómo cierre tu pinza mecánicamente
+const int minGripperAngle  = 130; // Cerrado o abierto
+const int maxGripperAngle  = 180; // Abierto o cerrado
+
+// ====== Estado ======
+unsigned long lastMovement = 0;
+bool servosAttached = false;
+
+int getDirectionFromJoystick(int analogValue) {
+  if (analogValue < (512 - deadzone)) return -1;
+  if (analogValue > (512 + deadzone)) return 1;
+  return 0;
+}
+
+void attachServos() {
+  if (!servosAttached) {
+    servoBase.attach(basePin);
+    servoShoulder.attach(shoulderPin);
+    servoElbow.attach(elbowPin);
+    servoGripper.attach(gripperPin);
+    servosAttached = true;
+  }
+}
+
+void detachServos() {
+  if (servosAttached) {
+    servoBase.detach();
+    servoShoulder.detach();
+    servoElbow.detach();
+    servoGripper.detach();
+    servosAttached = false;
+  }
+}
+
+void moveServoWithDirection(Servo &servo, int direction, int minAngle, int maxAngle, bool invertAxis) {
+  if (direction == 0) return;
+  int currentAngle = servo.read();
+  int delta = (invertAxis ? -direction : direction) * stepPerTick;
+  int newAngle = constrain(currentAngle + delta, minAngle, maxAngle);
+  if (newAngle != currentAngle) {
+    servo.write(newAngle);
+  }
+}
+
+void processSerialCommand(String command) {
+  command.trim();
+  if (command.length() == 0) return;
+
+  // Comando directo para la pinza desde Python
+  if (command.equalsIgnoreCase("GRIPPER OPEN")) {
+    attachServos();
+    servoGripper.write(minGripperAngle); // Cambiar a maxGripperAngle si queda invertida
+    lastMovement = millis();
+    Serial.println("OK GRIPPER OPEN");
+    return;
+  }
+  
+  if (command.equalsIgnoreCase("GRIPPER CLOSE")) {
+    attachServos();
+    servoGripper.write(maxGripperAngle); // Cambiar a minGripperAngle si queda invertida
+    lastMovement = millis();
+    Serial.println("OK GRIPPER CLOSE");
+    return;
+  }
+
+  // Compatibilidad con comandos: SERVO <num> <LEFT/RIGHT> <grados>
+  int servoNumber, degrees;
+  char direction[10];
+  int result = sscanf(command.c_str(), "SERVO %d %9s %d", &servoNumber, direction, &degrees);
+
+  if (result == 3 && degrees > 0) {
+    int dir = (strcmp(direction, "LEFT") == 0) ? -1 : ((strcmp(direction, "RIGHT") == 0) ? 1 : 0);
+    if (dir != 0) {
+      attachServos();
+      lastMovement = millis();
+      Servo* target = NULL;
+      int minA = 0, maxA = 180;
+
+      if (servoNumber == 1) { target = &servoBase; minA = minBaseAngle; maxA = maxBaseAngle; }
+      else if (servoNumber == 2) { target = &servoShoulder; minA = minShoulderAngle; maxA = maxShoulderAngle; }
+      else if (servoNumber == 3) { target = &servoElbow; minA = minElbowAngle; maxA = maxElbowAngle; }
+      else if (servoNumber == 4) { target = &servoGripper; minA = minGripperAngle; maxA = maxGripperAngle; }
+
+      if (target != NULL) {
+        int targetAngle = constrain(target->read() + (dir * degrees), minA, maxA);
+        target->write(targetAngle);
+        Serial.println("OK");
+        return;
+      }
+    }
+  }
+  Serial.println("ERROR");
+}
+
+void readSerial() {
+  static String command = "";
+  while (Serial.available()) {
+    char c = Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (command.length() > 0) {
+        processSerialCommand(command);
+        command = "";
+      }
+    } else {
+      command += c;
+    }
+  }
+}
+
+void setup() {
+  pinMode(PinTestigo, OUTPUT);
+  digitalWrite(PinTestigo, HIGH);
+
+  Serial.begin(115200);
+
+  servoBase.write((minBaseAngle + maxBaseAngle) / 2);
+  servoShoulder.write(minShoulderAngle);
+  servoElbow.write(minElbowAngle);
+  servoGripper.write(minGripperAngle);
+
+  lastMovement = millis();
+  Serial.println("ARM READY");
+}
+
+void loop() {
+  readSerial();
+
+  int xDir = getDirectionFromJoystick(analogRead(xdirPin));
+  int yDir = getDirectionFromJoystick(analogRead(ydirPin));
+  int zDir = getDirectionFromJoystick(analogRead(zdirPin));
+  int gDir = getDirectionFromJoystick(analogRead(gdirPin));
+
+  bool moving = (xDir != 0) || (yDir != 0) || (zDir != 0) || (gDir != 0);
+
+  if (moving) {
+    attachServos();
+    lastMovement = millis();
+
+    moveServoWithDirection(servoBase, xDir, minBaseAngle, maxBaseAngle, invertBase);
+    moveServoWithDirection(servoShoulder, yDir, minShoulderAngle, maxShoulderAngle, invertShoulder);
+    moveServoWithDirection(servoElbow, zDir, minElbowAngle, maxElbowAngle, invertElbow);
+    moveServoWithDirection(servoGripper, gDir, minGripperAngle, maxGripperAngle, invertGripper);
+  } else {
+    if (servosAttached && millis() - lastMovement >= detachDelay) {
+      detachServos();
+    }
+  }
+
+  delay(movementDelay);
+}
