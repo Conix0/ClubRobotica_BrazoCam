@@ -5,12 +5,12 @@ import mediapipe as mp
 import serial
 import time
 
-# 1. Configuración de Hardware
-ESP32_STREAM_URL = "http://192.168.100.232/stream"  # Tu IP del ESP32-CAM
-ARDUINO_PORT = "COM3"                             # Puerto de tu Arduino Nano
+
+ESP32_STREAM_URL = " http://10.244.110.125/stream"  # Tu IP del ESP32-CAM
+ARDUINO_PORT = "COM10"                             # Puerto 
 BAUD_RATE = 115200
 
-# Conexión Serial con Arduino Nano (Opcional si aún no lo enchufas)
+
 arduino = None
 try:
     arduino = serial.Serial(ARDUINO_PORT, BAUD_RATE, timeout=0.1)
@@ -106,8 +106,7 @@ try:
                                 print(f"    Respuesta de Arduino: {resp}")
                         last_state = "CLOSE"
 
-            # Dibujar mensaje en la ventana de video
-            # Fondo del texto para que se lea fácil
+            # mensaje en la camara
             cv2.rectangle(frame, (10, 10), (450, 60), (0, 0, 0), -1)
             color_texto = (0, 255, 0) if last_state == "OPEN" else (0, 0, 255) if last_state == "CLOSE" else (255, 255, 255)
             cv2.putText(frame, status_msg, (20, 42), cv2.FONT_HERSHEY_SIMPLEX, 0.7, color_texto, 2)

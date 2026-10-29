@@ -1,6 +1,6 @@
 #include <Arduino.h>
-#include <Servo.h>
-
+#include <WiFi.h>
+#include <ESP32Servo.h>
 
 // ====== Inversión ======
 const bool invertBase     = true;
@@ -14,25 +14,24 @@ Servo servoShoulder;
 Servo servoElbow;
 Servo servoGripper;
 
-// ====== Pines ======
-const int PinTestigo  = 3;
-const int basePin     = 11;
-const int shoulderPin = 9;
-const int elbowPin    = 10;
-const int gripperPin  = 6;
+// ====== Pines ESP32 ======
+const int PinTestigo  = 2;   // LED azul integrado en la mayoría del ESP32 
+const int basePin     = 18;
+const int shoulderPin = 19;
+const int elbowPin    = 21;
+const int gripperPin  = 22;
 
-// Joysticks
-const int xdirPin = 14;
-const int ydirPin = 15;
-const int zdirPin = 16;
-const int gdirPin = 17;
+// Joysticks (Pines del ADC1 compatibles con WiFi)
+const int xdirPin = 34;
+const int ydirPin = 35;
+const int zdirPin = 32;
+const int gdirPin = 33;
 
 // ====== Control ======
 const int movementDelay = 10;
 const int stepPerTick   = 1;
 const int deadzone      = 80;
 
-// Tiempo sin movimiento antes de DETACH (1.5 segundos)
 const unsigned long detachDelay = 1500;
 
 // ====== Límites ======
@@ -45,9 +44,8 @@ const int maxShoulderAngle = 180;
 const int minElbowAngle    = 0;
 const int maxElbowAngle    = 130;
 
-// Ajusta según cómo cierre tu pinza mecánicamente
-const int minGripperAngle  = 130; // Cerrado o abierto
-const int maxGripperAngle  = 180; // Abierto o cerrado
+const int minGripperAngle  = 130;
+const int maxGripperAngle  = 180;
 
 // ====== Estado ======
 unsigned long lastMovement = 0;
@@ -93,10 +91,12 @@ void processSerialCommand(String command) {
   command.trim();
   if (command.length() == 0) return;
 
-  // Comando directo para la pinza desde Python
+  // Reenviar también el comando a la ESP32-CAM por Serial2
+  Serial2.println(command);
+
   if (command.equalsIgnoreCase("GRIPPER OPEN")) {
     attachServos();
-    servoGripper.write(minGripperAngle); // Cambiar a maxGripperAngle si queda invertida
+    servoGripper.write(minGripperAngle);
     lastMovement = millis();
     Serial.println("OK GRIPPER OPEN");
     return;
@@ -104,13 +104,12 @@ void processSerialCommand(String command) {
   
   if (command.equalsIgnoreCase("GRIPPER CLOSE")) {
     attachServos();
-    servoGripper.write(maxGripperAngle); // Cambiar a minGripperAngle si queda invertida
+    servoGripper.write(maxGripperAngle);
     lastMovement = millis();
     Serial.println("OK GRIPPER CLOSE");
     return;
   }
 
-  // Compatibilidad con comandos: SERVO <num> <LEFT/RIGHT> <grados>
   int servoNumber, degrees;
   char direction[10];
   int result = sscanf(command.c_str(), "SERVO %d %9s %d", &servoNumber, direction, &degrees);
@@ -123,10 +122,10 @@ void processSerialCommand(String command) {
       Servo* target = NULL;
       int minA = 0, maxA = 180;
 
-      if (servoNumber == 1) { target = &servoBase; minA = minBaseAngle; maxA = maxBaseAngle; }
+      if (servoNumber == 1)      { target = &servoBase;     minA = minBaseAngle;     maxA = maxBaseAngle; }
       else if (servoNumber == 2) { target = &servoShoulder; minA = minShoulderAngle; maxA = maxShoulderAngle; }
-      else if (servoNumber == 3) { target = &servoElbow; minA = minElbowAngle; maxA = maxElbowAngle; }
-      else if (servoNumber == 4) { target = &servoGripper; minA = minGripperAngle; maxA = maxGripperAngle; }
+      else if (servoNumber == 3) { target = &servoElbow;    minA = minElbowAngle;    maxA = maxElbowAngle; }
+      else if (servoNumber == 4) { target = &servoGripper;  minA = minGripperAngle;  maxA = maxGripperAngle; }
 
       if (target != NULL) {
         int targetAngle = constrain(target->read() + (dir * degrees), minA, maxA);
@@ -140,6 +139,7 @@ void processSerialCommand(String command) {
 }
 
 void readSerial() {
+  // Comandos desde la PC vía USB
   static String command = "";
   while (Serial.available()) {
     char c = Serial.read();
@@ -152,21 +152,45 @@ void readSerial() {
       command += c;
     }
   }
+
+  // Respuestas provenientes de la ESP32-CAM vía Serial2
+  while (Serial2.available()) {
+    char c = Serial2.read();
+    Serial.write(c); // Reenviar a consola de la PC
+  }
 }
 
 void setup() {
   pinMode(PinTestigo, OUTPUT);
   digitalWrite(PinTestigo, HIGH);
 
-  Serial.begin(115200);
+  Serial.begin(115200);   // Monitor Serie / Python por USB
+  
+  // Inicialización de Serial2: RX=16, TX=17 hacia ESP32-CAM
+  Serial2.begin(115200, SERIAL_8N1, 16, 17);
 
+  // Calibrar ADC del ESP32 a 10 bits (0 - 1023) para compatibilidad con código Arduino
+  analogReadResolution(10);
+
+  // Asignar temporizadores para ESP32Servo
+  ESP32PWM::allocateTimer(0);
+  ESP32PWM::allocateTimer(1);
+  ESP32PWM::allocateTimer(2);
+  ESP32PWM::allocateTimer(3);
+  
+  servoBase.setPeriodHertz(50);
+  servoShoulder.setPeriodHertz(50);
+  servoElbow.setPeriodHertz(50);
+  servoGripper.setPeriodHertz(50);
+
+  attachServos();
   servoBase.write((minBaseAngle + maxBaseAngle) / 2);
   servoShoulder.write(minShoulderAngle);
   servoElbow.write(minElbowAngle);
   servoGripper.write(minGripperAngle);
 
   lastMovement = millis();
-  Serial.println("ARM READY");
+  Serial.println("ARM READY ON ESP32");
 }
 
 void loop() {
